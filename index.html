@@ -69,6 +69,28 @@
             user-select: none;
         }
 
+        /* Sans ça, un <button> HTML garde l'habillage natif du navigateur par-dessous le
+           style CSS personnalisé. Sur Android Chrome, cet habillage natif (fond
+           blanc/gris par défaut) peut apparaître furtivement au moment précis du tap,
+           avant que le style de l'app ne reprenne la main -> flash blanc à chaque clic
+           sur un bouton. appearance: none désactive complètement ce rendu natif, tout est
+           géré par le CSS de l'app. */
+        button {
+            -webkit-appearance: none;
+            appearance: none;
+        }
+
+        html {
+            /* Empêche Chrome Android d'interpréter un léger glissement vertical du doigt
+               pendant un tap (fréquent sur des taps rapides/répétés, ex. le stepper de
+               joueurs) comme un geste de "tirer pour rafraîchir" (pull-to-refresh). Ce
+               geste déclenchait un vrai rechargement de la page -> flash blanc avec le
+               contenu qui réapparaît non stylé une fraction de seconde. "contain" bloque
+               la propagation du scroll dépassant les bords vers le navigateur tout en
+               gardant le défilement normal intact à l'intérieur de la page. */
+            overscroll-behavior-y: contain;
+        }
+
         body {
             /* Écrit directement avec les variables --bg/--bg-alt/--bg-alt2 (au lieu de passer
                par une variable --bg-gradient intermédiaire) : une variable dérivée définie sur
@@ -87,6 +109,7 @@
             min-height: 100dvh;
             padding: 8px;
             overflow-x: hidden;
+            overscroll-behavior-y: contain;
             transition: background 0.3s ease;
         }
 
@@ -180,9 +203,17 @@
         }
 
         body.in-game .game-card {
-            background: var(--card-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            /* Ancien fond : var(--card-bg) (semi-transparent) + backdrop-filter: blur(16px)
+               pour un effet "verre dépoli". Ce flou est recalculé en continu par le
+               navigateur tant qu'un pixel change derrière (chrono, boutons, texte qui
+               pulse) : sur Android Chrome, ce recalcul de flou en temps réel est mal
+               optimisé sur de nombreux GPU (contrairement à iOS) et provoque des sauts et
+               scintillements pendant toute la partie. On garde le même rendu visuel (fond
+               sombre légèrement translucide) via un dégradé opaque, sans flou "live" :
+               plus aucun recalcul continu nécessaire derrière la carte. */
+            background: rgba(18, 18, 26, 0.97);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
             border: 1px solid var(--card-border);
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
         }
@@ -573,14 +604,29 @@
                 rgba(255,255,255,0.4) 50%, 
                 rgba(255,255,255,0) 100%
             );
-            transform: rotate(25deg);
+            /* Anciennement animé via "left" (0% -> 140%), une propriété de mise en page :
+               comme ce shimmer tourne en boucle infinie sur CHAQUE bouton de l'app (pas
+               seulement pendant le chrono), ça forçait un recalcul de layout en continu sur
+               tout l'écran -> scintillement persistant sur Android, y compris en dehors du
+               jeu. On anime "transform: translateX()" à la place (composé, géré par le GPU,
+               aucun recalcul de layout) : translateX(500%) de ce pseudo-élément équivaut au
+               même trajet visuel que l'ancien "left: 140%" (l'élément fait 40% de la largeur
+               du bouton, donc 500% de sa propre largeur = 200% de celle du bouton). */
+            transform: translateX(0%) rotate(25deg);
             animation: shimmer 3s infinite;
+            /* Pas de will-change ici : contrairement au chrono (un seul élément), le
+               shimmer tourne simultanément sur CHAQUE bouton visible à l'écran. Un
+               will-change par bouton force une couche GPU dédiée par bouton en permanence ;
+               avec plusieurs boutons + le fond de carte, ça peut saturer la mémoire GPU sur
+               un Android d'entrée/milieu de gamme et provoquer plus de saccades, pas moins.
+               "transform" étant déjà composé nativement, l'animation reste fluide sans ce
+               forçage. */
         }
 
         @keyframes shimmer {
-            0% { left: -60%; }
-            20% { left: 140%; }
-            100% { left: 140%; }
+            0% { transform: translateX(0%) rotate(25deg); }
+            20% { transform: translateX(500%) rotate(25deg); }
+            100% { transform: translateX(500%) rotate(25deg); }
         }
 
         .btn:active { transform: scale(0.97); }
@@ -1174,8 +1220,18 @@
             height: 100%;
             background: var(--warning);
             width: 100%;
-            transition: width 0.1s linear, background-color 0.3s;
-            will-change: width;
+            /* La barre était auparavant animée via la propriété "width", modifiée à chaque
+               frame par le JS du chrono (jusqu'à 60x/s). "width" est une propriété de mise
+               en page : chaque changement force le navigateur à recalculer tout le layout de
+               la page, et comme la carte de jeu a un backdrop-filter: blur() par-dessus, ce
+               recalcul entraîne aussi un recalcul du flou à chaque frame. Sur Chrome Android
+               ça sature le thread principal -> écran qui saute/scintille (iOS s'en sortait
+               mieux). On anime maintenant "transform: scaleX()", une propriété compositée
+               (gérée par le GPU sans recalcul de layout ni repaint), donc fluide et stable. */
+            transform: scaleX(1);
+            transform-origin: left center;
+            transition: transform 0.1s linear, background-color 0.3s;
+            will-change: transform;
         }
 
         .progress-bar-fill.warning { background: var(--primary); }
@@ -1656,6 +1712,13 @@
 
         /* --- Modale VIP (upsell / paiement) --- */
         .vip-modal-card { position: relative; max-width: 440px; max-height: 88vh; overflow-y: auto; text-align: left; }
+        /* Couronne isolée dans son propre élément, hors du texte en gradient : même pattern
+           que .modal-icon pour les autres modales (Règles, Rappel rapide). Un emoji inclus
+           dans un texte avec -webkit-background-clip:text + color:transparent peut se
+           retrouver rendu deux fois sur certains moteurs mobiles (le glyphe couleur de
+           l'emoji par-dessus le masque de clip du gradient) : on l'en sort pour éviter tout
+           risque de doublon, et le titre en dégradé reste du texte pur. */
+        .vip-modal-icon { font-size: 2.8rem; line-height: 1; text-align: center; }
         .vip-modal-title {
             font-size: 1.2rem; font-weight: 900; text-align: center; margin: 6px 0 2px;
             background: linear-gradient(90deg,#ffb800,#ff8c1a);
@@ -1837,7 +1900,8 @@
         <button type="button" class="vibe-modal-close" onclick="closeVipModal()" aria-label="Fermer">✕</button>
 
         <div id="vip-modal-locked-body">
-            <div class="vip-modal-title" id="vip-modal-title">👑 Passe VIP</div>
+            <div class="vip-modal-icon">👑</div>
+            <div class="vip-modal-title" id="vip-modal-title">Passe VIP</div>
             <p class="vip-modal-sub" id="vip-modal-reason">Débloque les parties à 5 joueurs ou plus (au lieu de 4 maximum en gratuit).</p>
 
             <div class="vip-offers">
@@ -1881,7 +1945,8 @@
         </div>
 
         <div id="vip-modal-already-body" style="display:none;">
-            <div class="vip-modal-title" id="vip-already-title">👑 Tu es VIP !</div>
+            <div class="vip-modal-icon">👑</div>
+            <div class="vip-modal-title" id="vip-already-title">Tu es VIP !</div>
             <div class="vip-already">
                 <p id="vip-already-detail">Accès VIP actif sur ce compte.</p>
                 <div class="checkbox-hint" style="margin-left:0;" id="vip-already-hint">Ton VIP est lié à ton compte <strong id="vip-account-email">—</strong>. Connecte-toi avec ce même compte sur un autre appareil pour le retrouver automatiquement.</div>
@@ -2832,7 +2897,7 @@
     function refreshVipModalTexts(reason) {
         const t = translations[currentLang] || translations['en'];
 
-        document.getElementById('vip-modal-title').innerText = t.vipModalTitle || '👑 VIP Pass';
+        document.getElementById('vip-modal-title').innerText = t.vipModalTitle || 'VIP Pass';
         document.getElementById('vip-modal-reason').innerText = reason || t.vipModalDefaultReason || "Unlocks games with 5 players or more (instead of a maximum of 4 in the free plan).";
 
         document.getElementById('vip-offer-24h-name').innerText = t.vipOffer24hName || '⏱️ 24h Pass';
@@ -2850,7 +2915,7 @@
         document.getElementById('vip-promo-btn').innerText = t.vipPromoBtn || 'Apply';
         document.getElementById('vip-modal-close-btn').innerText = t.vipModalCloseBtn || 'Close';
 
-        document.getElementById('vip-already-title').innerText = t.vipAlreadyTitle || '👑 You\'re VIP!';
+        document.getElementById('vip-already-title').innerText = t.vipAlreadyTitle || 'You\'re VIP!';
         document.getElementById('vip-already-continue-btn').innerText = t.vipAlreadyContinueBtn || '✅ Continue';
         document.getElementById('vip-already-signout-btn').innerText = t.vipAlreadySignoutBtn || 'Sign out';
 
@@ -3325,7 +3390,7 @@
             bonusGuesserToast: "🎁 Bonus Devineur ! +3 pour {name}",
             soloBonusRevealDescriberLabel: "Bonus Descripteur (+3 pts) :",
             soloBonusPillReminder: "🎁 5 cartes Bonus Descripteur + 5 Bonus Devineur cachées cette manche (+3 pts)",
-            quickRulesTitle: "💡 Rappel rapide",
+            quickRulesTitle: "Rappel rapide",
             quickRulesCurrentRound: "📍 Manche en cours",
             quickRulesSoloPoints: "✅ Chaque carte trouvée : +1 point au Descripteur ET au Devineur.",
             quickRulesSoloBonus: "🎁 5 cartes Bonus Descripteur + 5 Bonus Devineur sont cachées cette manche : +3 points en plus si l'une d'elles est trouvée. Personne ne sait lesquelles avant la révélation en fin de manche !",
@@ -3427,7 +3492,7 @@
             hmenuVipInactive: "👑 Pas encore VIP",
             vipEntryBtnActive: "👑 VIP actif",
             vipEntryBtnInactive: "👑 Passer VIP",
-            vipModalTitle: "👑 Passe VIP",
+            vipModalTitle: "Passe VIP",
             vipModalDefaultReason: "Débloque les parties à 5 joueurs ou plus (au lieu de 4 maximum en gratuit).",
             vipOffer24hName: "⏱️ Pass 24h",
             vipOffer24hDesc: "Accès VIP complet pendant 24h. Idéal pour une soirée.",
@@ -3439,7 +3504,7 @@
             vipPromoLabel: "Code promo :",
             vipPromoBtn: "Valider",
             vipModalCloseBtn: "Fermer",
-            vipAlreadyTitle: "👑 Tu es VIP !",
+            vipAlreadyTitle: "Tu es VIP !",
             vipAlreadyDetailUnlimited: "Formule : {plan} — accès illimité.",
             vipAlreadyDetailExpiring: "Formule : {plan} — actif jusqu'au {date}.",
             vipAlreadyHint: "Ton VIP est lié à ton compte {email}. Connecte-toi avec ce même compte sur un autre appareil pour le retrouver automatiquement.",
@@ -3561,7 +3626,7 @@
                 starwars: "La Force, les Jedi, les Sith et les personnages légendaires d'une galaxie lointaine."
             },
             fullRules: {
-                header: "📜 Règles de Whoops! (Version Digital)",
+                header: "Règles de Whoops! (Version Digital)",
                 digitalIntro: "En version digitale, un seul smartphone suffit pour toute la table. L'application gère la rotation des joueurs, le chrono, la pioche des mots et le calcul des scores.",
                 objTitle: "🎯 Objectif",
                 objDesc: "Faire deviner le plus de cartes possible à son équipe au cours de 3 manches. Les 3 manches se jouent avec exactement le même paquet de mots pioché au début de la partie.",
@@ -3612,7 +3677,7 @@
             bonusGuesserToast: "🎁 Guesser Bonus! +3 for {name}",
             soloBonusRevealDescriberLabel: "Describer Bonus (+3 pts):",
             soloBonusPillReminder: "🎁 5 Describer Bonus + 5 Guesser Bonus cards are hidden this round (+3 pts)",
-            quickRulesTitle: "💡 Quick reminder",
+            quickRulesTitle: "Quick reminder",
             quickRulesCurrentRound: "📍 Current round",
             quickRulesSoloPoints: "✅ Every found card: +1 point for BOTH the Describer and the Guesser.",
             quickRulesSoloBonus: "🎁 5 Describer Bonus + 5 Guesser Bonus cards are hidden this round: +3 extra points if one is found. Nobody knows which ones until they're revealed at the end of the round!",
@@ -3714,7 +3779,7 @@
             hmenuVipInactive: "👑 Not VIP yet",
             vipEntryBtnActive: "👑 VIP active",
             vipEntryBtnInactive: "👑 Go VIP",
-            vipModalTitle: "👑 VIP Pass",
+            vipModalTitle: "VIP Pass",
             vipModalDefaultReason: "Unlocks games with 5 players or more (instead of a maximum of 4 in the free plan).",
             vipOffer24hName: "⏱️ 24h Pass",
             vipOffer24hDesc: "Full VIP access for 24h. Perfect for a game night.",
@@ -3726,7 +3791,7 @@
             vipPromoLabel: "Promo code:",
             vipPromoBtn: "Apply",
             vipModalCloseBtn: "Close",
-            vipAlreadyTitle: "👑 You're VIP!",
+            vipAlreadyTitle: "You're VIP!",
             vipAlreadyDetailUnlimited: "Plan: {plan} — unlimited access.",
             vipAlreadyDetailExpiring: "Plan: {plan} — active until {date}.",
             vipAlreadyHint: "Your VIP status is linked to your account {email}. Sign in with the same account on another device to get it back automatically.",
@@ -3848,7 +3913,7 @@
                 starwars: "The Force, Jedi, Sith and legendary characters from a galaxy far, far away."
             },
             fullRules: {
-                header: "📜 Whoops! Rules (Digital Version)",
+                header: "Whoops! Rules (Digital Version)",
                 digitalIntro: "In digital version, a single smartphone is enough. The app manages player rotation, timer, card draw, and score calculation.",
                 objTitle: "🎯 Objective",
                 objDesc: "Make your team guess as many cards as possible over 3 rounds. All 3 rounds use the exact same deck drawn at start.",
@@ -3899,7 +3964,7 @@
             bonusGuesserToast: "🎁 ¡Bonus Adivinador! +3 para {name}",
             soloBonusRevealDescriberLabel: "Bonus Descriptor (+3 pts):",
             soloBonusPillReminder: "🎁 5 cartas Bonus Descriptor + 5 Bonus Adivinador ocultas esta ronda (+3 pts)",
-            quickRulesTitle: "💡 Recordatorio rápido",
+            quickRulesTitle: "Recordatorio rápido",
             quickRulesCurrentRound: "📍 Ronda actual",
             quickRulesSoloPoints: "✅ Cada carta encontrada: +1 punto tanto al Descriptor como al Adivinador.",
             quickRulesSoloBonus: "🎁 Hay 5 cartas Bonus Descriptor + 5 Bonus Adivinador ocultas esta ronda: +3 puntos extra si se encuentra una. ¡Nadie sabe cuáles son hasta la revelación al final de la ronda!",
@@ -4001,7 +4066,7 @@
             hmenuVipInactive: "👑 Aún no eres VIP",
             vipEntryBtnActive: "👑 VIP activo",
             vipEntryBtnInactive: "👑 Hazte VIP",
-            vipModalTitle: "👑 Pase VIP",
+            vipModalTitle: "Pase VIP",
             vipModalDefaultReason: "Desbloquea las partidas de 5 jugadores o más (en lugar de un máximo de 4 en la versión gratuita).",
             vipOffer24hName: "⏱️ Pase 24h",
             vipOffer24hDesc: "Acceso VIP completo durante 24h. Ideal para una noche de juego.",
@@ -4013,7 +4078,7 @@
             vipPromoLabel: "Código promocional:",
             vipPromoBtn: "Validar",
             vipModalCloseBtn: "Cerrar",
-            vipAlreadyTitle: "👑 ¡Ya eres VIP!",
+            vipAlreadyTitle: "¡Ya eres VIP!",
             vipAlreadyDetailUnlimited: "Plan: {plan} — acceso ilimitado.",
             vipAlreadyDetailExpiring: "Plan: {plan} — activo hasta el {date}.",
             vipAlreadyHint: "Tu VIP está vinculado a tu cuenta {email}. Inicia sesión con esa misma cuenta en otro dispositivo para recuperarlo automáticamente.",
@@ -4135,7 +4200,7 @@
                 starwars: "La Fuerza, los Jedi, los Sith y los personajes legendarios de una galaxia muy, muy lejana."
             },
             fullRules: {
-                header: "📜 Reglas de Whoops! (Versión Digital)",
+                header: "Reglas de Whoops! (Versión Digital)",
                 digitalIntro: "En versión digital, solo se necesita un smartphone. La app gestiona la rotación, el temporizador, las cartas y las puntuaciones.",
                 objTitle: "🎯 Objetivo",
                 objDesc: "Consigue que tu equipo adivine el mayor número de cartas a lo largo de 3 rondas jugando con el mismo mazo de palabras.",
@@ -4186,7 +4251,7 @@
             bonusGuesserToast: "🎁 猜词者奖励！{name} +3分",
             soloBonusRevealDescriberLabel: "描述者奖励（+3分）：",
             soloBonusPillReminder: "🎁 本轮隐藏了5张描述者奖励卡+5张猜词者奖励卡（+3分）",
-            quickRulesTitle: "💡 快速提醒",
+            quickRulesTitle: "快速提醒",
             quickRulesCurrentRound: "📍 当前回合",
             quickRulesSoloPoints: "✅ 每张猜中的卡片：描述者和猜词者都各得1分。",
             quickRulesSoloBonus: "🎁 本轮隐藏了5张描述者奖励卡+5张猜词者奖励卡：猜中即可额外+3分。在本轮结束揭晓之前没人知道是哪几张！",
@@ -4288,7 +4353,7 @@
             hmenuVipInactive: "👑 尚未开通VIP",
             vipEntryBtnActive: "👑 VIP 已开通",
             vipEntryBtnInactive: "👑 开通VIP",
-            vipModalTitle: "👑 VIP 通行证",
+            vipModalTitle: "VIP 通行证",
             vipModalDefaultReason: "解锁5人及以上的游戏（免费版最多4人）。",
             vipOffer24hName: "⏱️ 24小时通行证",
             vipOffer24hDesc: "24小时完整VIP权限，非常适合游戏之夜。",
@@ -4300,7 +4365,7 @@
             vipPromoLabel: "优惠码：",
             vipPromoBtn: "应用",
             vipModalCloseBtn: "关闭",
-            vipAlreadyTitle: "👑 你已是VIP！",
+            vipAlreadyTitle: "你已是VIP！",
             vipAlreadyDetailUnlimited: "方案：{plan} — 无限期使用。",
             vipAlreadyDetailExpiring: "方案：{plan} — 有效期至{date}。",
             vipAlreadyHint: "你的VIP状态与账号{email}绑定。在其他设备用同一账号登录即可自动找回。",
@@ -4422,7 +4487,7 @@
                 starwars: "原力、绝地武士、西斯，以及来自遥远星系的传奇角色。"
             },
             fullRules: {
-                header: "📜 Whoops! 规则（数字版）",
+                header: "Whoops! 规则（数字版）",
                 digitalIntro: "在数字版中，一部智能手机就足够了。应用会自动管理玩家轮换、计时、抽卡和计分。",
                 objTitle: "🎯 目标",
                 objDesc: "在3个回合中让你的队伍尽可能多地猜中卡片。所有3个回合使用开局时抽取的同一副牌。",
@@ -5502,7 +5567,7 @@
         timerElem.innerText = timeLeft + 's';
         timerElem.classList.remove('warning', 'penalty-flash');
         timerBar.classList.remove('warning');
-        timerBar.style.width = '100%';
+        timerBar.style.transform = 'scaleX(1)';
 
         document.getElementById('start-turn-btn').style.display = 'flex';
         document.getElementById('word-display').style.display = 'none';
@@ -5570,7 +5635,8 @@
         timeLeft = Math.ceil(remainingTime);
 
         const percentage = (remainingTime / timerConfig) * 100;
-        timerBar.style.width = percentage + '%';
+        // scaleX() au lieu de width : voir commentaire CSS sur .progress-bar-fill
+        timerBar.style.transform = 'scaleX(' + (percentage / 100) + ')';
 
         if (timeLeft !== timerLastSeconds) {
             timerLastSeconds = timeLeft;
