@@ -1,7 +1,7 @@
 {
-  "name": "Rush'Up! Game",
-  "short_name": "Rush'Up!",
-  "description": "Think fast, speak faster!",
+  "name": "Whoops! Game",
+  "short_name": "Whoops!",
+  "description": "Beat the Clock",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
